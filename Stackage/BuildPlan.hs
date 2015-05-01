@@ -10,6 +10,10 @@ module Stackage.BuildPlan
     , defaultSettings
     , setMirror
     , setSnapshot
+    , ShellCommands
+    , setShellCommands
+    , abstractCommands
+    , simpleCommands
     , getBuildPlan
     , toSimpleText
     , toShellScript
@@ -157,7 +161,66 @@ data Settings = Settings
     , _fullDeps   :: !Bool
     -- ^ include test and benchmark deps
     , _mirror     :: !Text
+    , _shellCmds  :: !ShellCommands
     }
+
+-- | How to generate commands for shell output.
+--
+-- Since 0.1.0.0
+data ShellCommands = ShellCommands
+    { scFetch :: Text -> Text
+    -- ^ URL
+    , scUnpack :: Text -> Text
+    -- ^ Tarball
+    , scBuild :: Map Text Bool -> Text
+    -- ^ Flags
+    }
+
+-- | Use abstract commands like build_plan_fetch.
+--
+-- See: https://github.com/fpco/stackage-server/issues/95#issuecomment-97146188
+--
+-- Since 0.1.0.0
+abstractCommands :: ShellCommands
+abstractCommands = ShellCommands
+    { scFetch = ("build_plan_fetch " <>)
+    , scUnpack = ("build_plan_unpack " <>)
+    , scBuild = ("build_plan_build " <>) . showFlags
+    }
+
+-- | Use simple commands requiring no wrapper shell script
+--
+-- Since 0.1.0.0
+simpleCommands :: ShellCommands
+simpleCommands = ShellCommands
+    { scFetch = ("wget " <>)
+    , scUnpack = ("tar xf " <>)
+    , scBuild = \flags -> T.concat
+        [ T.concat
+            [ "runghc Setup configure --user --flags='"
+            , showFlags flags
+            , "'"
+            ]
+        , "\nrunghc Setup build"
+        , "\nrunghc Setup copy"
+        , "\nrunghc Setup register"
+        ]
+    }
+
+showFlags :: Map Text Bool -> Text
+showFlags =
+    T.unwords . map go . Map.toList
+  where
+    go (name, isOn) = (if isOn then id else (T.cons '-')) name
+
+
+-- | Set the shell commands when using shell formatting.
+--
+-- Default: 'abstractCommands'
+--
+-- Since 0.1.0.0
+setShellCommands :: ShellCommands -> Settings -> Settings
+setShellCommands x s = s { _shellCmds = x }
 
 -- | Default settings, to be tweaked via setter functions.
 --
@@ -168,6 +231,7 @@ defaultSettings = Settings
     , _getManager = newManager tlsManagerSettings
     , _fullDeps = False
     , _mirror = "https://s3.amazonaws.com/hackage.fpcomplete.com/package/"
+    , _shellCmds = abstractCommands
     }
 
 -- | Set the snapshot from which to pull the build plan.
@@ -331,26 +395,12 @@ toShellScript set packages = T.unlines $ ($ []) $ execWriter $ do
                 , " "
                 , tarball
                 ]
-            , T.concat
-                [ "wget "
-                , _mirror set
-                , tarball
-                ]
-            , "tar xf " <> tarball
+            , scFetch sc $ _mirror set <> tarball
+            , scUnpack sc tarball
             , "cd " <> prefix
-            , T.concat
-                [ "runghc Setup configure --user --flags='"
-                , showFlags $ tiFlags ti
-                , "'"
-                ]
-            , "runghc Setup build"
-            , "runghc Setup copy"
-            , "runghc Setup register"
+            , scBuild sc $ tiFlags ti
             , "cd .."
             ]
   where
     yield x = tell (x:)
-    showFlags =
-        T.unwords . map go . Map.toList
-      where
-        go (name, isOn) = (if isOn then id else (T.cons '-')) name
+    sc = _shellCmds set

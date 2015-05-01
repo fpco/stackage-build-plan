@@ -27,9 +27,10 @@ main = do
         <*> renderOptions
         <*> some (argument str (metavar "PACKAGES..."))
 
-    mkSettings mmirror msnapshot =
+    mkSettings mmirror msnapshot mcommands =
           maybe id (setMirror . T.pack) mmirror
         $ maybe id setSnapshot msnapshot
+        $ maybe id setShellCommands mcommands
         $ defaultSettings
 
     setOptions = mkSettings
@@ -43,10 +44,22 @@ main = do
            <> help "Which snapshot to pull the build plan from"
            <> metavar "SNAPSHOT"
             )) <|> pure Nothing)
+        <*> ((fmap Just $ option readCommands
+            ( long "commands"
+           <> help "Shell commands do use: abstract, simple"
+           <> metavar "COMMANDS"
+            )) <|> pure Nothing)
 
     readSnapshot =
         str >>=
         either (fail . show) return . parseSnapshotSpec . T.pack
+
+    readCommands = do
+        s <- str
+        case s of
+            "abstract" -> return abstractCommands
+            "simple" -> return simpleCommands
+            _ -> fail $ "Invalid commands: " ++ s
 
     renderOptions =
         (option readRender
