@@ -5,8 +5,11 @@
 {-# LANGUAGE ScopedTypeVariables   #-}
 module Stackage.BuildPlan
     ( Settings
+    , SnapshotSpec
+    , parseSnapshotSpec
     , defaultSettings
     , setMirror
+    , setSnapshot
     , getBuildPlan
     , toSimpleText
     , toShellScript
@@ -61,6 +64,29 @@ import           Text.Read                   (readMaybe)
 
 catchIO :: IO a -> (E.IOException -> IO a) -> IO a
 catchIO = E.catch
+
+-- | Parse a snapshot specification from the given @Text@.
+--
+-- Since 0.1.0.0
+parseSnapshotSpec :: MonadThrow m => Text -> m SnapshotSpec
+parseSnapshotSpec "lts" = return $ IncompleteSpec LTSNewest
+parseSnapshotSpec "nightly" = return $ IncompleteSpec NightlyNewest
+parseSnapshotSpec s
+    | Just t <- T.stripPrefix "nightly-" s
+    , Just d <- readMaybe $ T.unpack t = return $ CompleteSpec $ Nightly d
+parseSnapshotSpec s
+    | Just t <- T.stripPrefix "lts-" s
+    , Just x <- go t = return x
+  where
+    go t1 = do
+        Right (x, t2) <- Just $ decimal t1
+        if T.null t2
+            then return $ IncompleteSpec $ LTSMajor x
+            else do
+                t3 <- T.stripPrefix "." t2
+                Right (y, "") <- Just $ decimal t3
+                return $ CompleteSpec $ LTS x y
+parseSnapshotSpec s = throwM $ InvalidSnapshotSpec s
 
 data CompleteSpec
     = Nightly !Day
@@ -118,6 +144,7 @@ data BuildPlanException
     | SpecNotResolved !Text !(Map Text Text)
     | InvalidSpec !Text
     | PackageNotFound !PackageName
+    | InvalidSnapshotSpec !Text
     deriving (Show, Typeable)
 instance Exception BuildPlanException
 
@@ -142,6 +169,14 @@ defaultSettings = Settings
     , _fullDeps = False
     , _mirror = "https://s3.amazonaws.com/hackage.fpcomplete.com/package/"
     }
+
+-- | Set the snapshot from which to pull the build plan.
+--
+-- Default: latest LTS release
+--
+-- Since 0.1.0.0
+setSnapshot :: SnapshotSpec -> Settings -> Settings
+setSnapshot x s = s { _snapshot = x }
 
 -- | Set the mirror prefix for tarball downloads (shell script only).
 --

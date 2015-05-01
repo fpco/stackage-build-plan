@@ -27,8 +27,9 @@ main = do
         <*> renderOptions
         <*> some (argument str (metavar "PACKAGES..."))
 
-    mkSettings mmirror =
+    mkSettings mmirror msnapshot =
           maybe id (setMirror . T.pack) mmirror
+        $ maybe id setSnapshot msnapshot
         $ defaultSettings
 
     setOptions = mkSettings
@@ -37,6 +38,15 @@ main = do
            <> help "Mirror to download packages from"
            <> metavar "URL"
             )) <|> pure Nothing)
+        <*> ((fmap Just $ option readSnapshot
+            ( long "snapshot"
+           <> help "Which snapshot to pull the build plan from"
+           <> metavar "SNAPSHOT"
+            )) <|> pure Nothing)
+
+    readSnapshot =
+        str >>=
+        either (fail . show) return . parseSnapshotSpec . T.pack
 
     renderOptions =
         (option readRender
