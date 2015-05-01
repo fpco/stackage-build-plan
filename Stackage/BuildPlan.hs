@@ -1,6 +1,8 @@
-{-# LANGUAGE DeriveDataTypeable, OverloadedStrings #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DeriveDataTypeable    #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
 module Stackage.BuildPlan
     ( Settings
     , defaultSettings
@@ -10,41 +12,51 @@ module Stackage.BuildPlan
     , mkPackageName
     ) where
 
-import Control.Monad.Writer.Strict (execWriter, tell)
-import qualified Data.Foldable as F
-import Data.Foldable (Foldable)
-import qualified Data.Set as Set
-import Data.Set (Set)
-import Data.Monoid
-import Control.Monad
-import System.Directory
-import System.FilePath
-import Control.Exception (Exception)
-import qualified Filesystem as F
-import Data.Yaml (decodeFileEither)
-import Control.Monad.State.Strict (get, modify, execStateT, MonadState)
-import Control.Monad.Catch
-import Stackage.Types
-import Distribution.Package (PackageName (..))
-import Data.Version (Version)
-import Data.Text (Text)
-import Data.Time (Day)
-import Network.HTTP.Client
-import Network.HTTP.Client.TLS
-import Text.Read (readMaybe)
-import qualified Data.Text as T
-import Data.Text.Read (decimal)
-import Control.Applicative ((<|>))
-import qualified Data.ByteString as S
-import Data.Function (fix)
-import System.IO
-import qualified Data.ByteString.Lazy as L
-import qualified Data.Aeson as A
-import Data.Aeson (object, (.=))
-import qualified Data.Map as Map
-import Data.Map (Map)
-import Data.Typeable (Typeable)
-import qualified Control.Exception as E
+import           Control.Applicative         ((<|>))
+import qualified Control.Exception           as E
+import           Control.Monad               (forM_, unless, when)
+import           Control.Monad.Catch         (Exception, MonadThrow, throwM)
+import           Control.Monad.State.Strict  (MonadState, execStateT, get,
+                                              modify)
+import           Control.Monad.Writer.Strict (execWriter, tell)
+import           Data.Aeson                  (object, (.=))
+import qualified Data.Aeson                  as A
+import qualified Data.ByteString             as S
+import qualified Data.ByteString.Lazy        as L
+import           Data.Foldable               (Foldable)
+import qualified Data.Foldable               as F
+import           Data.Function               (fix)
+import           Data.Map                    (Map)
+import qualified Data.Map                    as Map
+import           Data.Monoid                 ((<>))
+import           Data.Set                    (Set)
+import qualified Data.Set                    as Set
+import           Data.Text                   (Text)
+import qualified Data.Text                   as T
+import           Data.Text.Read              (decimal)
+import           Data.Time                   (Day)
+import           Data.Typeable               (Typeable)
+import           Data.Version                (Version)
+import           Data.Yaml                   (decodeFileEither)
+import           Distribution.Package        (PackageName)
+import           Network.HTTP.Client         (Manager, brRead, httpLbs,
+                                              newManager, parseUrl,
+                                              responseBody, withResponse)
+import           Network.HTTP.Client.TLS     (tlsManagerSettings)
+import           Stackage.Types              (BuildPlan (..), Component (..),
+                                              DepInfo (..),
+                                              PackageConstraints (..),
+                                              PackagePlan (..), SystemInfo (..),
+                                              display, mkPackageName,
+                                              sdPackages, unFlagName)
+import           System.Directory            (createDirectoryIfMissing,
+                                              doesFileExist,
+                                              getAppUserDataDirectory,
+                                              renameFile)
+import           System.FilePath             ((<.>), (</>))
+import           System.IO                   (IOMode (WriteMode),
+                                              withBinaryFile)
+import           Text.Read                   (readMaybe)
 
 catchIO :: IO a -> (E.IOException -> IO a) -> IO a
 catchIO = E.catch
@@ -72,7 +84,7 @@ resolveSpec man (IncompleteSpec spec) = do
     let lbs = responseBody res
     m <-
         case A.eitherDecode' lbs of
-            Left e -> throwM $ InvalidSnapshotsJson lbs
+            Left e -> throwM $ InvalidSnapshotsJson lbs e
             Right m -> return m
     case Map.lookup key m of
         Nothing -> throwM $ SpecNotResolved key m
@@ -101,7 +113,7 @@ parseCompleteSpec t =
         Just $ LTS x y
 
 data BuildPlanException
-    = InvalidSnapshotsJson !L.ByteString
+    = InvalidSnapshotsJson !L.ByteString !String
     | SpecNotResolved !Text !(Map Text Text)
     | InvalidSpec !Text
     | PackageNotFound !PackageName
@@ -109,9 +121,9 @@ data BuildPlanException
 instance Exception BuildPlanException
 
 data Settings = Settings
-    { _snapshot :: SnapshotSpec
-    , _getManager :: IO Manager
-    , _fullDeps :: Bool
+    { _snapshot   :: !SnapshotSpec
+    , _getManager :: !(IO Manager)
+    , _fullDeps   :: !Bool
     -- ^ include test and benchmark deps
     }
 
@@ -164,8 +176,8 @@ specUrl (Nightly x) = concat
 data ToInstall = ToInstall
     { tiPackage :: !PackageName
     , tiVersion :: !Version
-    , tiIsCore :: !Bool
-    , tiFlags :: !(Map Text Bool)
+    , tiIsCore  :: !Bool
+    , tiFlags   :: !(Map Text Bool)
     }
     deriving Show
 
@@ -183,7 +195,7 @@ getBuildPlan set packages = do
     man <- _getManager set
     fp <- yamlFP man $ _snapshot set
     bp <- decodeFileEither fp >>= either throwM return
-    (_, front) <- execStateT (getDeps bp (_fullDeps set) packages) (mempty, id)
+    (_, front) <- execStateT (getDeps bp (_fullDeps set) packages) (Set.empty, id)
     return $ front []
 
 type TheState =
@@ -210,7 +222,7 @@ getDeps bp fullDeps =
                     case Map.lookup name $ siCorePackages $ bpSystemInfo bp of
                         Just version -> do
                             addToSet name
-                            addToList name version mempty True
+                            addToList name version Map.empty True
                         Nothing -> throwM $ PackageNotFound name
 
     goPkg :: PackageName -> PackagePlan -> m ()
@@ -250,7 +262,7 @@ toSimpleText =
         ]
 
 toShellScript :: Settings -> [ToInstall] -> Text
-toShellScript set packages = T.unlines $ ($ []) $ execWriter $ do
+toShellScript _set packages = T.unlines $ ($ []) $ execWriter $ do
     yield "#!/usr/bin/env bash\nset -eux\n"
     forM_ packages $ \ti -> unless (tiIsCore ti) $ do
         let prefix = T.concat
