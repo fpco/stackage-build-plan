@@ -6,6 +6,7 @@
 module Stackage.BuildPlan
     ( Settings
     , defaultSettings
+    , setMirror
     , getBuildPlan
     , toSimpleText
     , toShellScript
@@ -120,19 +121,35 @@ data BuildPlanException
     deriving (Show, Typeable)
 instance Exception BuildPlanException
 
+-- | Settings affecting various functions in this module.
+--
+-- Since 0.1.0.0
 data Settings = Settings
     { _snapshot   :: !SnapshotSpec
     , _getManager :: !(IO Manager)
     , _fullDeps   :: !Bool
     -- ^ include test and benchmark deps
+    , _mirror     :: !Text
     }
 
+-- | Default settings, to be tweaked via setter functions.
+--
+-- Since 0.1.0.0
 defaultSettings :: Settings
 defaultSettings = Settings
     { _snapshot = IncompleteSpec LTSNewest
     , _getManager = newManager tlsManagerSettings
     , _fullDeps = False
+    , _mirror = "https://s3.amazonaws.com/hackage.fpcomplete.com/package/"
     }
+
+-- | Set the mirror prefix for tarball downloads (shell script only).
+--
+-- Default: "https://s3.amazonaws.com/hackage.fpcomplete.com/package/"
+--
+-- Since 0.1.0.0
+setMirror :: Text -> Settings -> Settings
+setMirror x s = s { _mirror = x }
 
 yamlFP :: Manager -> SnapshotSpec -> IO FilePath
 yamlFP man spec' = do
@@ -262,7 +279,7 @@ toSimpleText =
         ]
 
 toShellScript :: Settings -> [ToInstall] -> Text
-toShellScript _set packages = T.unlines $ ($ []) $ execWriter $ do
+toShellScript set packages = T.unlines $ ($ []) $ execWriter $ do
     yield "#!/usr/bin/env bash\nset -eux\n"
     forM_ packages $ \ti -> unless (tiIsCore ti) $ do
         let prefix = T.concat
@@ -279,7 +296,11 @@ toShellScript _set packages = T.unlines $ ($ []) $ execWriter $ do
                 , " "
                 , tarball
                 ]
-            , "wget https://s3.amazonaws.com/hackage.fpcomplete.com/package/" <> tarball
+            , T.concat
+                [ "wget "
+                , _mirror set
+                , tarball
+                ]
             , "tar xf " <> tarball
             , "cd " <> prefix
             , T.concat

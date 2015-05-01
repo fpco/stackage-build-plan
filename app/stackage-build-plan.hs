@@ -27,12 +27,22 @@ main = do
         <*> renderOptions
         <*> some (argument str (metavar "PACKAGES..."))
 
-    setOptions = pure defaultSettings
+    mkSettings mmirror =
+          maybe id (setMirror . T.pack) mmirror
+        $ defaultSettings
+
+    setOptions = mkSettings
+        <$> ((fmap Just $ strOption
+            ( long "mirror"
+           <> help "Mirror to download packages from"
+           <> metavar "URL"
+            )) <|> pure Nothing)
 
     renderOptions =
         (option readRender
             ( long "format"
            <> help "Output format: shell, simple, json"
+           <> metavar "FORMAT"
            ))
 
     readRender = do
