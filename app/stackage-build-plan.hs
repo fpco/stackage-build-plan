@@ -15,7 +15,7 @@ main :: IO ()
 main = do
     ((set, render, packages), ()) <- simpleOptions
         $(simpleVersion version)
-        "stackage-build-plan"
+        "Calculate and print (in different formats) Stackage build plans"
         "Calculate and print (in different formats) Stackage build plans"
         options
         empty
