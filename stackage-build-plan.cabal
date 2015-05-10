@@ -1,5 +1,5 @@
 name:                stackage-build-plan
-version:             0.1.0.0
+version:             0.1.1.0
 synopsis:            Calculate and print (in different formats) Stackage build plans
 description:         For more information, see <https://www.stackage.org/package/stackage-build-plan>
 homepage:            https://github.com/fpco/stackage-build-plan

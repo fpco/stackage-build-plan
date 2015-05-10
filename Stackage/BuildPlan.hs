@@ -10,6 +10,7 @@ module Stackage.BuildPlan
     , defaultSettings
     , setMirror
     , setSnapshot
+    , setFullDeps
     , ShellCommands
     , setShellCommands
     , abstractCommands
@@ -241,6 +242,14 @@ defaultSettings = Settings
 -- Since 0.1.0.0
 setSnapshot :: SnapshotSpec -> Settings -> Settings
 setSnapshot x s = s { _snapshot = x }
+
+-- | Should we trace dependencies of test suites and benchmarks?
+--
+-- Default: False
+--
+-- Since 0.1.1.0
+setFullDeps :: Bool -> Settings -> Settings
+setFullDeps x s = s { _fullDeps = x }
 
 -- | Set the mirror prefix for tarball downloads (shell script only).
 --
